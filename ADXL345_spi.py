@@ -5,14 +5,12 @@ import ustruct
 import gc
 from machine import SPI, Pin
 
-# TODO: const also on non bytes?
-
+# commented out micropython.native decorator as it is not supported in some ports
 class Accelerometer:
-  
-  def __init__(self, cs_pin=5, scl_pin=18, sda_pin=23, sdo_pin=19, spi_freq=5000000):
+  def __init__(self, spi_bus=1, cs_pin=5, scl_pin=18, sda_pin=23, sdo_pin=19, spi_freq=5000000):
     """
-    Class for fast SPI comunications between an ESP32 flashed with MicroPython and an Analog Devices ADXL345
-      accelerometer
+    Class for fast SPI comunications between a MCU flashed with MicroPython and an Analog Devices ADXL345 accelerometer
+    :param spi_bus: SPI bus number at which accelerometer is connected
     :param cs_pin: MCU pin number at which accelerometer's CS wire is connected
     :param scl_pin: MCU pin number at which accelerometer's SCL wire is connected (SCK)
     :param sda_pin: MCU pin number at which accelerometer's SDA wire is connected (MOSI)
@@ -23,9 +21,9 @@ class Accelerometer:
     # valid inputs
     if spi_freq > 5000000:
       spi_freq = 5000000
-      print('max spi clock frequency for adxl355 is 5Mhz')
+      print('max spi clock frequency for adxl345 is 5Mhz')
 
-    # constants
+    # constants # TODO: const also on non bytes?
     self.standard_g         = 9.80665  # m/s2
     self.read_mask          = const(0x80)
     self.multibyte_mask     = const(0x40)
@@ -45,6 +43,7 @@ class Accelerometer:
     self.regaddr_fifostatus = const(0x39)
 
     # SPI pins
+    self.spi_bus = spi_bus
     self.cs_pin = cs_pin
     self.scl_pin = scl_pin
     self.sdo_pin = sdo_pin
@@ -59,13 +58,13 @@ class Accelerometer:
       1600: 0x0e, 3200: 0x0f
     }
 
-  def __del__(self):
-    self.spi.deinit()
+  def __del__(self): # might not be called due to limitations of MicroPython
+    self.deinit_spi()
 
   # == general purpose ==
   def init_spi(self):
     self.spi = SPI(
-      2, sck=Pin(self.scl_pin, Pin.OUT), mosi=Pin(self.sda_pin, Pin.OUT), miso=Pin(self.sdo_pin),
+      self.spi_bus, sck=Pin(self.scl_pin, Pin.OUT), mosi=Pin(self.sda_pin, Pin.OUT), miso=Pin(self.sdo_pin),
       baudrate=self.spi_freq, polarity=1, phase=1, bits=8, firstbit=SPI.MSB
     )
     time.sleep(0.2)
@@ -95,8 +94,8 @@ class Accelerometer:
     self.cs.value(1)
     return self
 
-  @micropython.native
-  def read(self, regaddr: int, nbytes: int) -> bytearray or int:
+  #@micropython.native
+  def read(self, regaddr: int, nbytes: int) -> bytearray or int: # type: ignore
     """
     read bytes from register
     :param regaddr: register address to read
@@ -111,7 +110,7 @@ class Accelerometer:
     self.cs.value(1)
     return value
 
-  @micropython.native
+  #@micropython.native
   def read_into(self, buf: bytearray, regaddr: int) -> bytearray:
     """
     read bytes from register into an existing bytearray, generally faster than normal read
@@ -125,7 +124,7 @@ class Accelerometer:
     self.cs.value(1)
     return buf
 
-  @micropython.native
+  #@micropython.native
   def remove_first_bytes_from_bytearray_of_many_transactions(self, buf:bytearray) -> bytearray:
     """
     remove first byte of SPI transaction (which is irrelevant) from a buffer read through spi.readinto
@@ -217,21 +216,21 @@ class Accelerometer:
   def clear_isdataready(self):
     _ = self.read(self.regaddr_acc, 6)
 
-  @micropython.native
+  #@micropython.native
   def is_watermark_reached(self) -> bool:
     """
     :return: 1 if watermark level of measures was reached since last reading, 0 otherwise
     """
     return self.read(self.regaddr_intsource, 1)[0] >> 1 & 1  # second bit
 
-  @micropython.native
+  #@micropython.native
   def is_data_ready(self) -> bool:
     """
     :return: 1 if a new measure has arrived since last reading, 0 otherwise
     """
     return self.read(self.regaddr_intsource, 1)[0] >> 7 & 1  # eighth bit
 
-  @micropython.native
+  #@micropython.native
   def get_nvalues_in_fifo(self) -> int:
     """
     :return: number of measures (xyz counts 1) in the fifo since last reading
@@ -239,7 +238,7 @@ class Accelerometer:
     return self.read(self.regaddr_fifostatus, 1)[0] & 0x3f  # first six bits to int
 
   # == continuos readings able to reach 3.2 kHz ==
-  @micropython.native
+  #@micropython.native
   def read_many_xyz(self, n:int) -> tuple:
     """
     :param n: number of xyz accelerations to read from the accelerometer
@@ -287,15 +286,14 @@ class Accelerometer:
     buf = self.remove_first_bytes_from_bytearray_of_many_transactions(buf)
     buf = buf[:n_exp_meas * bytes_per_3axes]  # remove exceeding values
     T = T[:n_exp_meas]  # remove exceeding values
-    # debug
+    # debug # TODO: send error to webapp when actual acquisition time is different from expected
     actual_acq_time = (T[-1] - T[0]) / 1000000
     print('measured for %s seconds, expected %s seconds' % (actual_acq_time, n_exp_meas/self.sampling_rate))
-    print('avg sampling rate = ' + str(n_act_meas / actual_acq_time) + ' Hz')
-    # TODO: send error to webapp when actual acquisition time is different from expected
+    print('avg sampling rate = ' + str(n_act_meas / actual_acq_time) + ' Hz' if actual_acq_time != 0 else 'cannot compute avg sampling rate since acquisition time is 0; aboarting')
     gc.collect()
     return buf, T
 
-  @micropython.native
+  #@micropython.native
   def read_many_xyz_fromfifo(self, n: int) -> tuple:
     """
     read many measures of accaleration on the 3 axes from the fifo register
@@ -340,14 +338,13 @@ class Accelerometer:
     actual_acq_time = (t_stop - t_start) / 1000000
     actual_sampling_rate = n_act_meas / actual_acq_time
     T = [(i+1) / actual_sampling_rate for i in range(n_exp_meas)]
-    # debug
+    # debug # TODO: send error to webapp when actual acquisition time is different from expected
     print('measured for %s seconds, expected %s seconds' % (actual_acq_time, n/self.sampling_rate))
-    print('actual sampling rate = ' + str(n_act_meas / actual_acq_time) + ' Hz')
-    # TODO: send error to webapp when actual acquisition time is different from expected
+    print('actual sampling rate = ' + str(n_act_meas / actual_acq_time) + ' Hz' if actual_acq_time != 0 else 'cannot compute actual sampling rate since acquisition time is 0; aboarting')
     gc.collect()
     return buf, T
 
-  @micropython.native
+  #@micropython.native
   def read_continuos_xyz(self, acquisition_time:int) -> tuple:
     """
     read for the provided amount of time from the acceleration register, saving the value only if a new measure is
@@ -362,7 +359,7 @@ class Accelerometer:
     buf, T = self.read_many_xyz(n_exp_meas)
     return buf, T
 
-  @micropython.native
+  #@micropython.native
   def read_continuos_xyz_fromfifo(self, acquisition_time: int) -> tuple:
     """
     read for the provided amount of time all the values contained in the fifo register (if any)

@@ -6,7 +6,7 @@ import gc
 from machine import SPI, Pin
 
 # commented out micropython.native decorator as it is not supported in some ports
-class Accelerometer:
+class ADXL345:
   def __init__(self, spi_bus=1, cs_pin=5, scl_pin=18, sda_pin=23, sdo_pin=19, spi_freq=5000000):
     """
     Class for fast SPI comunications between a MCU flashed with MicroPython and an Analog Devices ADXL345 accelerometer
